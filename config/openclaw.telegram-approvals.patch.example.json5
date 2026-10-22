@@ -1,0 +1,21 @@
+// Example PATCH, NOT a full openclaw.json. Merge with your working installation.
+// See https://docs.openclaw.ai/channels/telegram/rich-messages
+// and https://docs.openclaw.ai/tools/exec-approvals-advanced
+// Replace TELEGRAM_USER_ID with your numeric Telegram account ID.
+{
+  tools: {
+    exec: { mode: 'ask' } // human confirmation for non-allowlisted host commands
+  },
+  channels: {
+    telegram: {
+      execApprovals: {
+        enabled: true,
+        approvers: ['TELEGRAM_USER_ID'],
+        target: 'dm'
+      },
+      capabilities: {
+        inlineButtons: 'dm'
+      }
+    }
+  }
+}

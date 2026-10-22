@@ -1,0 +1,20 @@
+# Set APP_IMAGE in /opt/aerodesk/.env; Actions deploys pinned :<commit-sha> tags.
+services:
+  demo:
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"
+    mem_limit: 256m
+    pids_limit: 100
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

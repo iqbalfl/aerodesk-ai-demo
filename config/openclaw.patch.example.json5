@@ -1,0 +1,32 @@
+// EXAMPLE PATCH ONLY. Do not replace ~/.openclaw/openclaw.json wholesale.
+// Fill in YOUR_DOMAIN, YOUR_EMAIL, numeric TELEGRAM_USER_ID.
+// In trusted-proxy mode, first remove any existing gateway.auth.token.
+// Use `openclaw config patch --file ... --dry-run` before applying.
+{
+  gateway: {
+    bind: "loopback",
+    publicOrigin: "https://ai.YOUR_DOMAIN",
+    trustedProxies: ["127.0.0.1", "::1"],
+    controlUi: { allowedOrigins: ["https://ai.YOUR_DOMAIN"] },
+    auth: {
+      mode: "trusted-proxy",
+      trustedProxy: {
+        userHeader: "cf-access-authenticated-user-email",
+        requiredHeaders: ["cf-access-jwt-assertion"],
+        allowLoopback: true,
+        allowUsers: ["YOUR_EMAIL"]
+      }
+    }
+  },
+  channels: {
+    telegram: {
+      enabled: true,
+      tokenFile: "/home/YOUR_LINUX_USER/.config/openclaw/telegram.token",
+      dmPolicy: "allowlist",
+      allowFrom: ["TELEGRAM_USER_ID"],
+      groupPolicy: "disabled"
+    }
+  },
+  memory: { search: { provider: "gemini", model: "gemini-embedding-001" } },
+  tools: { exec: { mode: "ask" } }
+}
