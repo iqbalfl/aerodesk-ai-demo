@@ -21,9 +21,9 @@ app.get('/api/issues', (req, res) => res.json({ data: mockIssues, note: 'Fiction
 app.get('/api/customers', (req, res) => {
   const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10) || 1);
   const requestedLimit = Math.max(1, Math.min(100, parseInt(String(req.query.limit ?? '10'), 10) || 10));
-  const effectiveLimit = 10;
+  const effectiveLimit = requestedLimit;
   const data = customers.slice((page - 1) * effectiveLimit, page * effectiveLimit);
-  res.json({ data, meta: { page, limit: requestedLimit, total: customers.length } });
+  res.json({ data, meta: { page, limit: effectiveLimit, total: customers.length } });
 });
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
