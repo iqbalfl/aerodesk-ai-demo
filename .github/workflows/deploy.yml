@@ -1,71 +1,131 @@
-name: Build and Deploy Demo
+name: Build and Deploy AeroDesk Demo
+
 on:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy_mode:
+        description: 'fixed = regression test passes; baseline = seeded bug reproduced (demo reset only)'
+        required: true
+        default: fixed
+        type: choice
+        options:
+          - fixed
+          - baseline
+
 permissions:
   contents: read
-  packages: write
+
+# Serializes automatic deployment and intentional demo-baseline re-deploy.
 concurrency:
-  group: aerodesk-production
+  group: aerodesk-demo-production
   cancel-in-progress: false
+
 jobs:
   build:
-    name: Test and Publish Image
+    name: Test, Build and Publish GHCR
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      DEPLOY_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_mode || 'fixed' }}
     outputs:
-      image: ${{ steps.name.outputs.image }}
+      image: ${{ steps.image.outputs.name }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - run: npm install --prefix app --no-audit --no-fund
-      - name: Regression test
+      - name: Install app dependencies
+        run: npm install --prefix app --no-audit --no-fund
+      - name: Regression tests (fixed mode)
+        if: env.DEPLOY_MODE == 'fixed'
         run: npm test --prefix app
-      - name: Select immutable image tag
-        id: name
+      - name: Choose immutable image name
+        id: image
         shell: bash
         run: |
-          image="ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}"
-          echo "image=${image}" >> "$GITHUB_OUTPUT"
-      - name: Build container
-        run: docker build --build-arg APP_REVISION="$GITHUB_SHA" -t "${{ steps.name.outputs.image }}" .
-      - name: Login to GitHub Container Registry
-        run: echo "$GHCR_PASSWORD" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          name="ghcr.io/${GITHUB_REPOSITORY,,}:${GITHUB_SHA}"
+          echo "name=${name}" >> "$GITHUB_OUTPUT"
+      - name: Build Docker image
         env:
-          GHCR_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
-      - name: Push image
-        run: docker push "${{ steps.name.outputs.image }}"
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          docker build \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --build-arg "APP_REVISION=${GITHUB_SHA}" \
+            -t "$IMAGE" .
+      - name: Verify image API for selected mode
+        shell: bash
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          set -euo pipefail
+          docker run -d --rm --name aerodesk-ci-smoke -p 127.0.0.1:18000:3000 "$IMAGE"
+          trap 'docker rm -f aerodesk-ci-smoke >/dev/null 2>&1 || true' EXIT
+          for i in $(seq 1 30); do
+            if curl -fsS --max-time 2 http://127.0.0.1:18000/health >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          if [[ "$DEPLOY_MODE" == baseline ]]; then
+            BASE_URL=http://127.0.0.1:18000 bash scripts/smoke-test.sh
+          else
+            DEMO_BASE_URL=http://127.0.0.1:18000 bash scripts/check-fixed-live.sh
+          fi
+      - name: Log in to GHCR
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+      - name: Push immutable SHA image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: docker push "$IMAGE"
+
   deploy:
-    name: Deploy VPS over SSH
-    runs-on: ubuntu-latest
+    name: SSH Deploy and Verify VPS
     needs: build
+    runs-on: ubuntu-latest
     environment: production
     permissions:
       contents: read
+      packages: read
+    env:
+      DEPLOY_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.deploy_mode || 'fixed' }}
     steps:
-      - name: Configure SSH with pinned known host
+      - name: Configure verified SSH host key and deploy identity
         shell: bash
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
         run: |
-          mkdir -p "$HOME/.ssh"
-          chmod 700 "$HOME/.ssh"
+          set -euo pipefail
+          test -n "$DEPLOY_SSH_KEY"
+          test -n "$DEPLOY_KNOWN_HOSTS"
+          install -m 700 -d "$HOME/.ssh"
           printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
           chmod 600 "$HOME/.ssh/id_ed25519"
           printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
           chmod 600 "$HOME/.ssh/known_hosts"
-      - name: Deploy pinned image and verify health
+      - name: Deploy image from GHCR over SSH
         shell: bash
         env:
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
           DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PORT: ${{ vars.DEPLOY_PORT }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APP_IMAGE: ${{ needs.build.outputs.image }}
         run: |
           set -euo pipefail
-          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.-]+$ ]]
-          [[ "$DEPLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]]
-          ssh -o BatchMode=yes -o StrictHostKeyChecking=yes \
+          : "${DEPLOY_HOST:?missing DEPLOY_HOST}"
+          : "${DEPLOY_USER:?missing DEPLOY_USER}"
+          [[ "$DEPLOY_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || exit 2
+          [[ "$DEPLOY_USER" =~ ^[A-Za-z_][A-Za-z0-9_-]*$ ]] || exit 2
+          DEPLOY_PORT="${DEPLOY_PORT:-22}"
+          [[ "$DEPLOY_PORT" =~ ^[0-9]{1,5}$ ]] || exit 2
+          # Token travels over SSH standard input, not in argv or source files.
+          printf '%s\n' "$GHCR_TOKEN" | ssh -T -p "$DEPLOY_PORT" \
+            -o BatchMode=yes -o StrictHostKeyChecking=yes \
             "$DEPLOY_USER@$DEPLOY_HOST" \
-            "/opt/aerodesk/remote-deploy.sh '$APP_IMAGE' '$GITHUB_SHA'"
+            "\$HOME/projects/aerodesk-runtime/remote-deploy.sh '$APP_IMAGE' '$GITHUB_SHA' '$DEPLOY_MODE' '$GITHUB_ACTOR'"

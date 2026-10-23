@@ -1,7 +1,8 @@
-# Set APP_IMAGE in /opt/aerodesk/.env; Actions deploys pinned :<commit-sha> tags.
+# Image tag is provided by ~/projects/aerodesk-runtime/.env (APP_IMAGE).
+# Must use same Compose project name as the baseline app: aerodesk-ai-demo.
 services:
   demo:
-    image: ${APP_IMAGE:?APP_IMAGE must be set in .env}
+    image: ${APP_IMAGE:?APP_IMAGE must be defined}
     restart: unless-stopped
     ports:
       - "127.0.0.1:3000:3000"
