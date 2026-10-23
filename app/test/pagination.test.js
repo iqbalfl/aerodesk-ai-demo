@@ -20,6 +20,7 @@ test('pagination page 1 respects limit=3', async () => withServer(async origin =
   assert.equal(body.meta.limit, 3);
   assert.equal(body.data.length, 3);
   assert.deepEqual(body.data.map(c => c.id), [1, 2, 3]);
+  assert.deepEqual(body.meta, { page: 1, limit: 3, total: 36 });
 }));
 
 test('pagination page 2 respects limit=3', async () => withServer(async origin => {
@@ -27,6 +28,32 @@ test('pagination page 2 respects limit=3', async () => withServer(async origin =
   const body = await res.json();
   assert.equal(body.data.length, 3);
   assert.deepEqual(body.data.map(c => c.id), [4, 5, 6]);
+  assert.deepEqual(body.meta, { page: 2, limit: 3, total: 36 });
+}));
+
+test('limit=3 defaults to page 1', async () => withServer(async origin => {
+  const res = await fetch(`${origin}/api/customers?limit=3`);
+  assert.equal(res.status, 200);
+  const body = await res.json();
+  assert.deepEqual(body.data.map(c => c.id), [1, 2, 3]);
+  assert.deepEqual(body.meta, { page: 1, limit: 3, total: 36 });
+}));
+
+for (const [input, limit] of [['1', 1], ['100', 100], ['-5', 1], ['0', 10], ['invalid', 10]]) {
+  test(`limit=${input} normalizes to ${limit}`, async () => withServer(async origin => {
+    const res = await fetch(`${origin}/api/customers?limit=${input}`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.meta, { page: 1, limit, total: 36 });
+    assert.deepEqual(body.data.map(c => c.id), Array.from({ length: Math.min(limit, 36) }, (_, i) => i + 1));
+  }));
+}
+
+test('page beyond the last page has empty data and stable metadata', async () => withServer(async origin => {
+  const res = await fetch(`${origin}/api/customers?page=13&limit=3`);
+  const body = await res.json();
+  assert.deepEqual(body.data, []);
+  assert.deepEqual(body.meta, { page: 13, limit: 3, total: 36 });
 }));
 
 test('default limit=10 still returns ten records', async () => withServer(async origin => {
